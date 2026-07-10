@@ -2,6 +2,9 @@ import requests
 import time
 from datetime import datetime
 import pytz
+from flask import Flask
+from threading import Thread
+import os
 
 # --- CONFIGURATION ---
 TOKEN = '8777718464:AAHU9yDQviSt5vFsZTqUQU12oVsCIV0SNeY'
@@ -10,15 +13,26 @@ API_URL = 'https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json
 
 ist = pytz.timezone('Asia/Kolkata')
 
+# --- LIGHTWEIGHT WEB SERVER FOR RENDER PORT BINDING ---
+web_app = Flask('')
+
+@web_app.route('/')
+def home():
+    return "MLB v6.1 Matrix Engine is Alive and Running!"
+
+def run_web_server():
+    # Render automatically passes a PORT environment variable
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host='0.0.0.0', port=port)
+
 # --- SYSTEM SETTINGS ---
 config_state = {
-    "SYSTEM_MODE": "IN_TIME",  # Default mode: IN_TIME
+    "SYSTEM_MODE": "IN_TIME",  
     "is_session_active": False,
     "last_prediction_data": None,
     "last_minute_triggered": ""
 }
 
-# --- TRACKING ---
 stats = {"wins": 0, "losses": 0, "max_win_streak": 0, "max_loss_streak": 0, "curr_streak": 0}
 
 def get_log_time():
@@ -41,7 +55,6 @@ def get_session_schedule():
             next_s = label
     return current, next_s
 
-# --- HTTP TELEGRAM METHODS ---
 def send_tg_message(text):
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -88,7 +101,6 @@ def answer_callback_query(callback_query_id):
     except:
         pass
 
-# --- API DATA FETCH ---
 def get_market_data():
     t_str = get_log_time()
     try:
@@ -108,7 +120,6 @@ def get_market_data():
         print(f"[{t_str}] ❌ [API FETCH ERROR] Connection failed: {api_err}", flush=True)
         return []
 
-# --- 100% ORIGINAL MLB V6.1 LOGIC CORE ---
 def calculate_mlb_prediction(history, current_loss_streak):
     t_str = get_log_time()
     if len(history) < 5: 
@@ -117,15 +128,10 @@ def calculate_mlb_prediction(history, current_loss_streak):
     processed = []
     for item in reversed(history[:20]):
         num = int(item['number'])
-        processed.append({
-            'num': num,
-            'size': 'S' if num < 5 else 'B',
-            'color': item.get('color', 'unknown')
-        })
+        processed.append({'num': num, 'size': 'S' if num < 5 else 'B', 'color': item.get('color', 'unknown')})
         
     len_p = len(processed)
     l1, l2, l3, l4 = processed[len_p-1], processed[len_p-2], processed[len_p-3], processed[len_p-4]
-    
     macro_small = sum(1 for h in processed if h['size'] == 'S')
     macro_big = sum(1 for h in processed if h['size'] == 'B')
     macro_trend = 'S' if macro_small > macro_big else 'B'
@@ -220,7 +226,6 @@ def run_prediction_cycle():
            f"⚡ Select: **{display_pred}**\n"
            f"📊 Bet Level: **L{loss_streak + 1}**\n"
            f"━━━━━━━━━━━━━━")
-    
     send_tg_message(msg)
     print(f"[{t_str}] ✉️ [TELEGRAM SENT] Target Period {next_issue[-5:]} dispatched.", flush=True)
     return {"issue": next_issue, "prediction": pred_res['prediction'], "alert": pred_res['alert']}
@@ -236,7 +241,6 @@ def check_round_result(last_pred):
         
     act_num = int(found['number'])
     act_size = 'S' if act_num < 5 else 'B'
-    
     print(f"[{t_str}] 📊 [EVALUATION] Period {last_pred['issue']} -> Pred: {last_pred['prediction']} | Act: {act_size}", flush=True)
     
     if last_pred['prediction'] == act_size:
@@ -251,7 +255,6 @@ def check_round_result(last_pred):
         send_tg_message("❌ **LOSS** 📉")
     return True
 
-# --- TELEGRAM Updates Poller ---
 def poll_telegram_commands(offset):
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
@@ -260,106 +263,83 @@ def poll_telegram_commands(offset):
             updates = r.json().get("result", [])
             for u in updates:
                 offset = u["update_id"] + 1
-                
                 if "message" in u and "text" in u["message"]:
                     msg = u["message"]
                     if msg["text"] == "/admin":
-                        print(f"[{get_log_time()}] 🛡️ [ADMIN CONTROL] Panel requested by admin.", flush=True)
                         send_admin_panel(msg["chat"]["id"])
-                        
                 if "callback_query" in u:
                     cb = u["callback_query"]
                     cb_id = cb["id"]
                     cb_data = cb["data"]
                     chat_id = cb["message"]["chat"]["id"]
                     msg_id = cb["message"]["message_id"]
-                    
                     answer_callback_query(cb_id)
                     if cb_data == "mode_intime":
                         config_state["SYSTEM_MODE"] = "IN_TIME"
-                        print(f"[{get_log_time()}] ⚙️ [MODE SWITCH] Mode changed to IN_TIME", flush=True)
                         edit_admin_panel(chat_id, msg_id, "✅ **Switch Mode Locked Successfully!**\nSystem Rule Applied: `⏰ IN TIME (Target Session Slots Block)`")
                     elif cb_data == "mode_everytime":
                         config_state["SYSTEM_MODE"] = "EVERY_TIME"
-                        print(f"[{get_log_time()}] ⚙️ [MODE SWITCH] Mode changed to EVERY_TIME", flush=True)
                         edit_admin_panel(chat_id, msg_id, "✅ **Switch Mode Locked Successfully!**\nSystem Rule Applied: `🔄 EVERY TIME (24/7 Continuous Signals)`")
         elif r.status_code == 409:
-            print(f"[{get_log_time()}] ⚠️ [TG API CONFLICT] HTTP 409: Another session is grabbing updates. Retrying cleanup loop...", flush=True)
-            time.sleep(2)  # Cooldown rate controller
-        else:
-            print(f"[{get_log_time()}] ⚠️ [TG POLL CODE] Server returned HTTP {r.status_code}", flush=True)
-    except Exception as poll_err:
-        print(f"[{get_log_time()}] ⚠️ [TG POLL EXCEPTION] Connection status: {poll_err}", flush=True)
+            time.sleep(2)
+    except:
+        pass
     return offset
 
-# --- ENGINE CORE WATCHDOG ---
+# --- MAIN EXECUTOR ---
 def main():
-    print(f"[{get_log_time()}] 🚀 [SYSTEM INITIATION] Booting Pydroid 3 Safe Matrix Stack...", flush=True)
+    print(f"[{get_log_time()}] 🚀 [SYSTEM INITIATION] Booting Safe Universal Engine...", flush=True)
     
-    # --- AUTOMATIC WEBHOOK FLUSH INJECTION ---
+    # 1. Start background web server thread for Render port binding
+    server_thread = Thread(target=run_web_server)
+    server_thread.daemon = True
+    server_thread.start()
+    print(f"[{get_log_time()}] 🌐 [WEB SERVER] Internal port mapping server bound successfully.", flush=True)
+
     try:
         requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook", timeout=5)
-        print(f"[{get_log_time()}] 🔄 [CLEANUP] Executed session flush on Telegram API server. Active conflicting profile wiped.", flush=True)
+        print(f"[{get_log_time()}] 🔄 [CLEANUP] Conflict webhook wiped.", flush=True)
     except:
         pass
         
-    print(f"[{get_log_time()}] 📡 [WATCHDOG] Active and polling Telegram... Current Mode: IN_TIME.", flush=True)
     tg_offset = 0
-    
     while True:
         try:
             now = datetime.now(ist)
             current_minute_str = now.strftime('%Y-%m-%d %H:%M')
             current_slot, next_slot = get_session_schedule()
-            
             should_run = (config_state["SYSTEM_MODE"] == "EVERY_TIME") or (config_state["SYSTEM_MODE"] == "IN_TIME" and current_slot is not None)
             
-            # Start Session
             if should_run and not config_state["is_session_active"]:
                 config_state["is_session_active"] = True
                 global stats
                 stats = {"wins": 0, "losses": 0, "max_win_streak": 0, "max_loss_streak": 0, "curr_streak": 0}
                 config_state["last_prediction_data"] = None
                 label = current_slot if current_slot else "24/7 NON-STOP MACHINE"
-                print(f"[{get_log_time()}] 🔔 [SESSION START] Online for: {label}", flush=True)
                 send_tg_message(f"🔔 **SESSION STARTED ({label})** 🚀🔥\nMLB v6.1 Matrix Online.")
                 continue
 
-            # End Session
             if config_state["is_session_active"] and not should_run and config_state["last_prediction_data"] is None and stats["curr_streak"] >= 0:
                 config_state["is_session_active"] = False
-                print(f"[{get_log_time()}] 🏁 [SESSION END] Telemetry saved.", flush=True)
-                summary = (f"🏁 **SESSION COMPLETED REPORT** 🏆👑\n"
-                           f"━━━━━━━━━━━━━━\n"
-                           f"⚙️ Runtime Environment: `{config_state['SYSTEM_MODE']}`\n"
-                           f"✅ Total Wins Recorded: `{stats['wins']}`\n"
-                           f"❌ Total Losses Tracked: `{stats['losses']}`\n"
-                           f"🏆 Maximum Win Streak: `{stats['max_win_streak']}`\n"
-                           f"🔥 Max Loss Level Hit: `L{stats['max_loss_streak'] + 1 if stats['max_loss_streak'] > 0 else 1}`\n"
-                           f"━━━━━━━━━━━━━━\n"
-                           f"⏰ **Next Target Schedule Block Window:** `{next_slot}`")
+                summary = (f"🏁 **SESSION COMPLETED REPORT** 🏆👑\n━━━━━━━━━━━━━━\n"
+                           f"⚙️ Setting: `{config_state['SYSTEM_MODE']}`\n✅ Wins: `{stats['wins']}`\n❌ Losses: `{stats['losses']}`\n"
+                           f"🏆 Max Streak: `{stats['max_win_streak']}`\n🔥 Max Lvl: `L{stats['max_loss_streak'] + 1 if stats['max_loss_streak'] > 0 else 1}`\n"
+                           f"━━━━━━━━━━━━━━\n⏰ **Next Schedule Window:** `{next_slot}`")
                 send_tg_message(summary)
                 continue
 
-            # Dynamic Clock Trigger Block
             if config_state["is_session_active"] and now.second >= 3 and config_state["last_minute_triggered"] != current_minute_str:
                 config_state["last_minute_triggered"] = current_minute_str
-                print(f"[{get_log_time()}] ⏰ [CLOCK TRIGGER] Processing 03s+ block...", flush=True)
-                
                 if config_state["last_prediction_data"]:
                     check_round_result(config_state["last_prediction_data"])
                     config_state["last_prediction_data"] = None 
-                
                 if should_run or stats["curr_streak"] < 0:
                     time.sleep(0.5) 
                     config_state["last_prediction_data"] = run_prediction_cycle()
 
-            # Instant Telegram Polling
             tg_offset = poll_telegram_commands(tg_offset)
-            
         except Exception as e:
             print(f"[{get_log_time()}] ⚠️ [LOOP ERROR] {e}", flush=True)
-            
         time.sleep(0.3)
 
 if __name__ == "__main__":
